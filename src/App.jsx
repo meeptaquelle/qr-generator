@@ -189,7 +189,7 @@ async function makeStickerBlob(label) {
   const lines = wrapText(measureCtx, caption, width - marginX * 2);
   const lineHeight = Math.round(fontSize * 1.22);
   const captionHeight = lines.length * lineHeight;
-  const bottomMargin = Math.round(width * 0.035);
+  const bottomMargin = Math.round(width * 0.034);
   const height = topMargin + qrSize + gap + captionHeight + bottomMargin;
 
   const canvas = document.createElement('canvas');

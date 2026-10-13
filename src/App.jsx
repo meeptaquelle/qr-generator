@@ -68,74 +68,11 @@ function loadImage(src) {
   });
 }
 
-const PNG_CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function pngCrc32(bytes) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i += 1) crc = PNG_CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function writeUint32BE(bytes, offset, value) {
-  bytes[offset] = (value >>> 24) & 0xff;
-  bytes[offset + 1] = (value >>> 16) & 0xff;
-  bytes[offset + 2] = (value >>> 8) & 0xff;
-  bytes[offset + 3] = value & 0xff;
-}
-
-async function addPngDpiMetadata(blob, dpi = 300) {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (bytes.length < 33 || !signature.every((value, index) => bytes[index] === value)) return blob;
-  const pixelsPerMeter = Math.round(dpi / 0.0254);
-  const chunk = new Uint8Array(21);
-  writeUint32BE(chunk, 0, 9);
-  chunk.set([112, 72, 89, 115], 4); // pHYs
-  writeUint32BE(chunk, 8, pixelsPerMeter);
-  writeUint32BE(chunk, 12, pixelsPerMeter);
-  chunk[16] = 1; // pixels per meter
-  writeUint32BE(chunk, 17, pngCrc32(chunk.subarray(4, 17)));
-
-  const parts = [bytes.slice(0, 8)];
-  let offset = 8;
-  let inserted = false;
-  while (offset + 12 <= bytes.length) {
-    const length = (bytes[offset] * 0x1000000) + (bytes[offset + 1] << 16) + (bytes[offset + 2] << 8) + bytes[offset + 3];
-    const end = offset + 12 + length;
-    if (end > bytes.length) return blob;
-    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
-    if (type !== 'pHYs') parts.push(bytes.slice(offset, end));
-    if (type === 'IHDR' && !inserted) {
-      parts.push(chunk);
-      inserted = true;
-    }
-    offset = end;
-    if (type === 'IEND') break;
-  }
-  if (!inserted) return blob;
-  return new Blob(parts, { type: 'image/png' });
-}
-
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        reject(new Error('The browser could not create the PNG file.'));
-        return;
-      }
-      try {
-        resolve(await addPngDpiMetadata(blob, 300));
-      } catch (error) {
-        reject(error);
-      }
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('The browser could not create the PNG file.'));
     }, 'image/png');
   });
 }
@@ -163,10 +100,10 @@ async function makeStickerBlob(label) {
   if (!content) throw new Error('Enter the URL or text to encode first.');
   const widthMm = Math.min(100, Math.max(20, Number(label.widthMm) || 50));
   const width = Math.round((widthMm / 25.4) * 300);
-  const qrSize = Math.round(width * 0.90);
+  const qrSize = Math.round(width * 0.76);
   const qrDataUrl = await QRCode.toDataURL(content, {
     errorCorrectionLevel: 'H',
-    margin: 4,
+    margin: 2,
     width: qrSize,
     color: { dark: '#111111', light: '#FFFFFF' },
   });
@@ -178,18 +115,18 @@ async function makeStickerBlob(label) {
     logoImage = await loadImage(logoDataUrl);
   }
 
-  const marginX = Math.round(width * 0.08);
-  const topMargin = Math.round(width * 0.035);
+  const marginX = Math.round(width * 0.035);
+  const topMargin = Math.round(width * 0.025);
   const gap = Math.round(width * 0.035);
   const fontSize = Math.max(16, Math.round(width * 0.061));
   const caption = String(label.name || '').trim() || ' ';
   const measureCanvas = document.createElement('canvas');
   const measureCtx = measureCanvas.getContext('2d');
   measureCtx.font = `700 ${fontSize}px Arial, Helvetica, sans-serif`;
-  const lines = wrapText(measureCtx, caption, width - marginX * 2);
+  const lines = wrapText(measureCtx, caption, width - marginX * 1.5);
   const lineHeight = Math.round(fontSize * 1.22);
   const captionHeight = lines.length * lineHeight;
-  const bottomMargin = Math.round(width * 0.034);
+  const bottomMargin = Math.round(width * 0.025);
   const height = topMargin + qrSize + gap + captionHeight + bottomMargin;
 
   const canvas = document.createElement('canvas');
@@ -203,11 +140,11 @@ async function makeStickerBlob(label) {
   ctx.drawImage(qrImage, qrX, topMargin, qrSize, qrSize);
 
   if (logoImage) {
-    const maxLogoSize = Math.round(qrSize * 0.19);
+    const maxLogoSize = Math.round(qrSize * 0.25);
     const ratio = Math.min(maxLogoSize / logoImage.width, maxLogoSize / logoImage.height);
     const logoWidth = Math.max(1, Math.round(logoImage.width * ratio));
     const logoHeight = Math.max(1, Math.round(logoImage.height * ratio));
-    const padding = Math.round(qrSize * 0.025);
+    const padding = Math.round(qrSize * 0.005);
     const boxWidth = logoWidth + padding * 2;
     const boxHeight = logoHeight + padding * 2;
     const boxX = Math.round(width / 2 - boxWidth / 2);
@@ -308,7 +245,18 @@ export default function App() {
   const [formLogoBlob, setFormLogoBlob] = useState(null);
   const [logoUrl, setLogoUrl] = useState('');
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('create');
+  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    try { return localStorage.getItem('qr-label-studio-theme') === 'dark'; } catch { return false; }
+  })
+  useEffect(() => {
+  document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+  try {
+    localStorage.setItem('qr-label-studio-theme', darkMode ? 'dark' : 'light');
+  } catch {}
+}, [darkMode]);
+  ;
+  
   const [content, setContent] = useState('');
   const [name, setName] = useState('');
   const [widthMm, setWidthMm] = useState(DEFAULT_WIDTH_MM);
@@ -471,7 +419,6 @@ export default function App() {
       await refreshLabels();
       setEditingId(label.id);
       setNotice(alsoDownload ? 'Label saved and PNG exported.' : 'Label saved to your local library.');
-      setTab('library');
     } catch (err) {
       setError(err.message || 'Could not save this label.');
     } finally {
@@ -488,7 +435,6 @@ export default function App() {
     setFormLogoBlob(label.logoBlob || logoBlob || null);
     setError('');
     setNotice(`Editing “${label.name}”. Save to update this label.`);
-    setTab('create');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -619,7 +565,6 @@ export default function App() {
       }
       await refreshLabels();
       setNotice(`Imported ${imported} label${imported === 1 ? '' : 's'} from backup.`);
-      setTab('library');
     } catch (err) {
       setError(err.message || 'Could not import this backup.');
     } finally {
@@ -634,17 +579,14 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-mark" aria-hidden="true"><span /></div>
-        <div className="brand-copy">
-          <h1>QR Label Studio</h1>
-          <p>Generate, organize, and print QR labels.</p>
+        <div className="brand-copy"><h1>QR Label Studio</h1></div>
+        <div className="topbar-actions">
+          <button className="icon-button theme-toggle" type="button" onClick={() => setDarkMode((value) => !value)} aria-label={darkMode ? 'Switch to light theme' : 'Switch to dark theme'} title={darkMode ? 'Light theme' : 'Dark theme'}>{darkMode ? '☼' : '☾'}</button>
+          <button className="button secondary small" type="button" onClick={exportLibraryBackup} disabled={busy}>Export backup</button>
+          <button className="button secondary small" type="button" onClick={() => importInputRef.current?.click()} disabled={busy}>Import backup</button>
+          <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => importLibraryBackup(event.target.files?.[0])} />
         </div>
-        <div className="local-badge"><span className="status-dot" /> Stored locally</div>
       </header>
-
-      <nav className="tabs" aria-label="Main sections">
-        <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => setTab('create')}>Create label</button>
-        <button className={tab === 'library' ? 'tab active' : 'tab'} onClick={() => setTab('library')}>Label library <span className="count-pill">{labels.length}</span></button>
-      </nav>
 
       {(error || notice) && (
         <div className={error ? 'message error-message' : 'message success-message'} role="status">
@@ -653,177 +595,111 @@ export default function App() {
         </div>
       )}
 
-      {loading ? <div className="loading-state">Loading your local label library…</div> : (
-        <>
-          {tab === 'create' && (
-            <section className="create-layout">
-              <div className="panel editor-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">LABEL EDITOR</p>
-                    <h2>{editingId ? 'Edit label' : 'Create a label'}</h2>
-                  </div>
-                  {editingId && <span className="editing-pill">Editing saved label</span>}
+      {loading ? <div className="loading-state">Loading labels…</div> : (
+        <section className={`workspace-layout ${libraryCollapsed ? 'library-collapsed' : ''}`}>
+          <div className="panel editor-panel">
+            <div className="panel-heading">
+              <div><p className="eyebrow">EDITOR</p><h2>{editingId ? 'Edit label' : 'New label'}</h2></div>
+              {editingId && <span className="editing-pill">Editing</span>}
+            </div>
+            <form onSubmit={(event) => { event.preventDefault(); saveLabel(false); }}>
+              <label className="field-label" htmlFor="qr-content">QR content <span className="required">*</span></label>
+              <textarea id="qr-content" value={content} onChange={(event) => setContent(event.target.value)} placeholder="URL, text, or item ID" rows={3} required />
+              <p className="field-help">The exact text encoded in the QR code.</p>
+
+              <label className="field-label" htmlFor="label-caption">Caption <span className="required">*</span></label>
+              <input id="label-caption" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. ASSET-001" maxLength={180} required />
+              <p className="field-help">Printed in bold below the code.</p>
+
+              <div className="field-row">
+                <div className="field-group">
+                  <label className="field-label" htmlFor="sticker-width">Sticker width</label>
+                  <select id="sticker-width" value={widthMm} onChange={(event) => setWidthMm(event.target.value)}>
+                    <option value="30">30 mm</option><option value="40">40 mm</option><option value="50">50 mm</option><option value="60">60 mm</option><option value="70">70 mm</option><option value="80">80 mm</option><option value="100">100 mm</option>
+                  </select>
                 </div>
-                <form onSubmit={(event) => { event.preventDefault(); saveLabel(false); }}>
-                  <label className="field-label" htmlFor="qr-content">QR content <span className="required">*</span></label>
-                  <textarea id="qr-content" value={content} onChange={(event) => setContent(event.target.value)} placeholder="Enter a URL, text, or item identifier" rows={3} required />
-                  <p className="field-help">This is the exact text encoded inside the QR code.</p>
-
-                  <label className="field-label" htmlFor="label-caption">Caption <span className="required">*</span></label>
-                  <input id="label-caption" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. ASSET-001" maxLength={180} required />
-                  <p className="field-help">Printed in bold underneath the QR code. Long captions wrap automatically.</p>
-
-                  <div className="field-row">
-                    <div className="field-group">
-                      <label className="field-label" htmlFor="sticker-width">Sticker width</label>
-                      <select id="sticker-width" value={widthMm} onChange={(event) => setWidthMm(event.target.value)}>
-                        <option value="30">30 mm</option>
-                        <option value="40">40 mm</option>
-                        <option value="50">50 mm</option>
-                        <option value="60">60 mm</option>
-                        <option value="70">70 mm</option>
-                        <option value="80">80 mm</option>
-                        <option value="100">100 mm</option>
-                      </select>
-                    </div>
-                    <div className="field-group logo-option-group">
-                      <span className="field-label">Logo on label</span>
-                      <label className="switch-row">
-                        <input type="checkbox" checked={useLogo} onChange={(event) => setUseLogo(event.target.checked)} disabled={!formLogoBlob} />
-                        <span>Use saved logo</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="logo-card">
-                    <div className="logo-preview">
-                      {logoUrl ? <img src={logoUrl} alt="Saved logo" /> : <span className="logo-placeholder">PNG</span>}
-                    </div>
-                    <div className="logo-card-copy">
-                      <strong>{logoBlob ? 'Saved logo' : 'No logo saved'}</strong>
-                      <span>{logoBlob ? 'Reused for new labels in this browser.' : 'Upload a transparent PNG if you need a logo.'}</span>
-                      <button className="text-button" type="button" onClick={() => logoInputRef.current?.click()}>{logoBlob ? 'Replace PNG logo' : 'Upload PNG logo'}</button>
-                      <input ref={logoInputRef} className="visually-hidden" type="file" accept="image/png,.png" onChange={(event) => persistLogo(event.target.files?.[0])} />
-                    </div>
-                    {logoBlob && <button className="icon-button remove-logo" type="button" title="Remove saved logo" onClick={async () => {
-                      await dbRequest('assets', 'readwrite', 'delete', 'defaultLogo');
-                      setLogoBlob(null);
-                      if (!editingId) setFormLogoBlob(null);
-                      setUseLogo(false);
-                      setNotice('Saved logo removed. Existing labels retain their own logo copies.');
-                    }}>×</button>}
-                  </div>
-                  <p className="field-help">PNG only, up to 5 MB. Logos are stored in this browser and never uploaded to a server.</p>
-
-                  <div className="form-actions">
-                    <button className="button primary" type="submit" disabled={busy}>{busy ? 'Working…' : editingId ? 'Save changes' : 'Save label'}</button>
-                    <button className="button secondary" type="button" disabled={busy} onClick={() => saveLabel(true)}>{busy ? 'Working…' : 'Save + export PNG'}</button>
-                    {editingId && <button className="button subtle" type="button" onClick={clearForm}>New label</button>}
-                  </div>
-                </form>
-              </div>
-
-              <aside className="panel preview-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">LIVE PREVIEW</p>
-                    <h2>Sticker preview</h2>
-                  </div>
-                  <span className="preview-size">{widthMm} mm wide</span>
-                </div>
-                <div className="sticker-preview-stage">
-                  {previewUrl ? <img className="sticker-preview-image" src={previewUrl} alt="Preview of generated QR sticker" /> : (
-                    <div className="empty-preview">
-                      <div className="empty-qr-icon">▦</div>
-                      <strong>Your sticker appears here</strong>
-                      <span>Enter QR content to preview the label.</span>
-                    </div>
-                  )}
-                </div>
-                <div className="preview-specs">
-                  <div><span>Format</span><strong>PNG</strong></div>
-                  <div><span>Render quality</span><strong>300 DPI equivalent</strong></div>
-                  <div><span>QR correction</span><strong>High (H)</strong></div>
-                </div>
-                <p className="preview-note">The PNG is rendered at approximately 300 pixels per inch for the selected width. Printer software may still need to be set to the intended physical size.</p>
-              </aside>
-            </section>
-          )}
-
-          {tab === 'library' && (
-            <section className="library-panel panel">
-              <div className="library-heading">
-                <div>
-                  <p className="eyebrow">YOUR COLLECTION</p>
-                  <h2>Label library</h2>
-                  <p className="muted">Saved on this device. Open a label to edit it or select several to export together.</p>
-                </div>
-                <button className="button primary" onClick={() => { clearForm(); setTab('create'); }}>＋ New label</button>
-              </div>
-              <div className="library-toolbar">
-                <div className="search-box"><span aria-hidden="true">⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search caption or QR content" aria-label="Search labels" /></div>
-                <div className="toolbar-actions">
-                  <button className="button secondary" onClick={exportLibraryBackup} disabled={busy}>Export backup</button>
-                  <button className="button secondary" onClick={() => importInputRef.current?.click()} disabled={busy}>Import backup</button>
-                  <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={(event) => importLibraryBackup(event.target.files?.[0])} />
+                <div className="field-group logo-option-group">
+                  <span className="field-label">Logo</span>
+                  <label className="switch-row"><input type="checkbox" checked={useLogo} onChange={(event) => setUseLogo(event.target.checked)} disabled={!formLogoBlob} /><span>Include saved logo</span></label>
                 </div>
               </div>
 
-              {labels.length > 0 && (
-                <div className="bulk-toolbar">
-                  <label className="check-label"><input type="checkbox" checked={selectVisibleAllChecked} onChange={(event) => toggleAllVisible(event.target.checked)} /> Select all visible</label>
-                  <span className="selected-counter">{selectedCount} selected</span>
-                  <div className="bulk-actions">
-                    <button className="button secondary small" onClick={() => setSelected(new Set())} disabled={!selectedCount || busy}>Clear selection</button>
-                    <button className="button primary small" onClick={exportZip} disabled={!selectedCount || busy}>{busy ? 'Exporting…' : `Export ZIP${selectedCount ? ` (${selectedCount})` : ''}`}</button>
-                  </div>
+              <div className="logo-card">
+                <div className="logo-preview">{logoUrl ? <img src={logoUrl} alt="Saved logo" /> : <span className="logo-placeholder">PNG</span>}</div>
+                <div className="logo-card-copy">
+                  <strong>{logoBlob ? 'Saved logo' : 'No logo saved'}</strong>
+                  <span>{logoBlob ? 'Used for new labels.' : 'PNG, up to 5 MB.'}</span>
+                  <button className="text-button" type="button" onClick={() => logoInputRef.current?.click()}>{logoBlob ? 'Replace logo' : 'Upload logo'}</button>
+                  <input ref={logoInputRef} className="visually-hidden" type="file" accept="image/png,.png" onChange={(event) => persistLogo(event.target.files?.[0])} />
                 </div>
+                {logoBlob && <button className="icon-button remove-logo" type="button" title="Remove saved logo" onClick={async () => {
+                  await dbRequest('assets', 'readwrite', 'delete', 'defaultLogo');
+                  setLogoBlob(null);
+                  if (!editingId) setFormLogoBlob(null);
+                  setUseLogo(false);
+                  setNotice('Logo removed. Existing labels keep their saved logo.');
+                }}>×</button>}
+              </div>
+
+              <div className="form-actions">
+                <button className="button primary" type="submit" disabled={busy}>{busy ? 'Working…' : editingId ? 'Save changes' : 'Save label'}</button>
+                <button className="button secondary" type="button" disabled={busy} onClick={() => saveLabel(true)}>{busy ? 'Working…' : 'Save + export PNG'}</button>
+                {editingId && <button className="button subtle" type="button" onClick={clearForm}>Cancel edit</button>}
+              </div>
+            </form>
+          </div>
+
+          <aside className="panel preview-panel">
+            <div className="panel-heading">
+              <div><p className="eyebrow">PREVIEW</p><h2>Sticker</h2></div>
+              <span className="preview-size">{widthMm} mm</span>
+            </div>
+            <div className="sticker-preview-stage">
+              {previewUrl ? <img className="sticker-preview-image" src={previewUrl} alt="Preview of generated QR sticker" /> : (
+                <div className="empty-preview"><div className="empty-qr-icon">▦</div><strong>Preview</strong><span>Enter QR content to see the label.</span></div>
               )}
+            </div>
+            <div className="preview-specs">
+              <div><span>Format</span><strong>PNG</strong></div><div><span>Resolution</span><strong>300 DPI</strong></div><div><span>Error correction</span><strong>High</strong></div>
+            </div>
+            <div className="preview-actions">
+              <button className="button primary" type="button" onClick={() => saveLabel(true)} disabled={busy || !content.trim() || !name.trim()}>{busy ? 'Working…' : 'Save + export PNG'}</button>
+            </div>
+          </aside>
 
-              {filteredLabels.length === 0 ? (
-                <div className="empty-library">
-                  <div className="empty-library-icon">▤</div>
-                  <h3>{labels.length ? 'No matching labels' : 'No saved labels yet'}</h3>
-                  <p>{labels.length ? 'Try a different search.' : 'Create a label first. Saved labels will appear here for editing and bulk export.'}</p>
-                  {!labels.length && <button className="button primary" onClick={() => { clearForm(); setTab('create'); }}>Create first label</button>}
+          <aside className={`panel library-panel ${libraryCollapsed ? 'is-collapsed' : ''}`}>
+            <div className="library-heading">
+              {!libraryCollapsed && <div><p className="eyebrow">LIBRARY <span className="count-pill">{labels.length}</span></p><h2>Saved labels</h2></div>}
+              <button className="icon-button library-collapse-toggle" type="button" onClick={() => setLibraryCollapsed((value) => !value)} aria-label={libraryCollapsed ? 'Expand label library' : 'Collapse label library'} title={libraryCollapsed ? 'Expand library' : 'Collapse library'}>{libraryCollapsed ? '‹' : '›'}</button>
+            </div>
+            {!libraryCollapsed && <>
+              <div className="library-toolbar"><div className="search-box"><span aria-hidden="true">⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search labels" aria-label="Search labels" /></div></div>
+              {labels.length > 0 && <div className="bulk-toolbar">
+                <label className="check-label"><input type="checkbox" checked={selectVisibleAllChecked} onChange={(event) => toggleAllVisible(event.target.checked)} /> Select all</label>
+                <span className="selected-counter">{selectedCount} selected</span>
+                <div className="bulk-actions">
+                  <button className="button secondary small" onClick={() => setSelected(new Set())} disabled={!selectedCount || busy}>Clear</button>
+                  <button className="button primary small" onClick={exportZip} disabled={!selectedCount || busy}>{busy ? 'Exporting…' : 'ZIP export'}</button>
                 </div>
-              ) : (
+              </div>}
+              {filteredLabels.length === 0 ? <div className="empty-library"><div className="empty-library-icon">▤</div><h3>{labels.length ? 'No matches' : 'No saved labels'}</h3><p>{labels.length ? 'Try another search.' : 'Save a label to start your collection.'}</p></div> : (
                 <div className="label-grid">
-                  {filteredLabels.map((label) => (
-                    <article className={`label-card ${selected.has(label.id) ? 'selected' : ''}`} key={label.id}>
-                      <div className="label-card-top">
-                        <label className="check-label card-check"><input type="checkbox" checked={selected.has(label.id)} onChange={(event) => setSelected((old) => {
-                          const next = new Set(old);
-                          if (event.target.checked) next.add(label.id); else next.delete(label.id);
-                          return next;
-                        })} /><span className="sr-only">Select {label.name}</span></label>
-                        <span className="saved-date">{formatDate(label.updatedAt)}</span>
-                      </div>
-                      <LabelThumbnail label={label} onOpen={() => editLabel(label)} />
-                      <div className="label-card-content">
-                        <p className="label-value" title={label.content}>{label.content}</p>
-                        <div className="label-meta"><span>{label.widthMm || DEFAULT_WIDTH_MM} mm wide</span><span>{label.useLogo && label.logoBlob ? 'Logo' : 'No logo'}</span></div>
-                      </div>
-                      <div className="label-card-actions">
-                        <button className="button secondary small" onClick={() => editLabel(label)} disabled={busy}>Edit</button>
-                        <button className="button secondary small" onClick={() => exportOne(label)} disabled={busy}>PNG ↓</button>
-                        <button className="icon-button delete-button" title={`Delete ${label.name}`} aria-label={`Delete ${label.name}`} onClick={() => deleteLabel(label)} disabled={busy}>×</button>
-                      </div>
-                    </article>
-                  ))}
+                  {filteredLabels.map((label) => <article className={`label-card ${selected.has(label.id) ? 'selected' : ''}`} key={label.id}>
+                    <div className="label-card-top">
+                      <label className="check-label card-check"><input type="checkbox" checked={selected.has(label.id)} onChange={(event) => setSelected((old) => { const next = new Set(old); if (event.target.checked) next.add(label.id); else next.delete(label.id); return next; })} /><span className="sr-only">Select {label.name}</span></label>
+                      <span className="saved-date">{formatDate(label.updatedAt)}</span>
+                    </div>
+                    <LabelThumbnail label={label} onOpen={() => editLabel(label)} />
+                    <div className="label-card-content"><p className="label-value" title={label.content}>{label.content}</p><div className="label-meta"><span>{label.widthMm || DEFAULT_WIDTH_MM} mm</span><span>{label.useLogo && label.logoBlob ? 'Logo' : 'No logo'}</span></div></div>
+                    <div className="label-card-actions"><button className="button secondary small" onClick={() => editLabel(label)} disabled={busy}>Edit</button><button className="button secondary small" onClick={() => exportOne(label)} disabled={busy}>PNG ↓</button><button className="icon-button delete-button" title={`Delete ${label.name}`} aria-label={`Delete ${label.name}`} onClick={() => deleteLabel(label)} disabled={busy}>×</button></div>
+                  </article>)}
                 </div>
               )}
-              <div className="library-footer"><span>{labels.length} saved label{labels.length === 1 ? '' : 's'}</span><span>Library data stays in this browser profile.</span></div>
-            </section>
-          )}
-        </>
+              <div className="library-footer"><span>{labels.length} labels</span></div>
+            </>}
+          </aside>
+        </section>
       )}
-
-      <footer className="app-footer">
-        <span>QR Label Studio</span>
-        <span>Local-first · No account · No backend</span>
-      </footer>
     </main>
   );
 }
